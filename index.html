@@ -720,10 +720,35 @@ function nextIdle() {
 idleV.onended = nextIdle;
 if (IDLES.length) { pres.classList.add('has-idle'); idleCur = IDLES[0]; idleV.src = `media/v/${idleCur}.mp4`; }
 const SFX = {};
-function sfx(n, v = .3) { if (muted || !DATA.sfx || !DATA.sfx.includes(n)) return; try { (SFX[n] ||= new Audio(`media/sfx/${n}.mp3`)); const a = SFX[n].cloneNode(); a.volume = v; a.play().catch(() => {}); } catch (e) {} }
-let duckT;
-const BED = .22, DUCK = .16;  // bed track is -16 LUFS: ≈ -31…-33 LUFS under the voice (alvana-audio USAGE §5)
-function setMusic(t) { clearInterval(duckT); duckT = setInterval(() => { const d = t - music.volume; if (Math.abs(d) < .005) { music.volume = t; clearInterval(duckT); return; } music.volume = Math.max(0, Math.min(1, music.volume + d * .25)); }, 40); }
+/* Music and effects go through Web Audio gain nodes: iPhone Safari ignores element.volume (the bed would play at full
+   level, louder than the narrator), and Android phone speakers swallowed the old -32 LUFS bed completely. */
+let AC = null, mGain = null; const SFXB = {};
+function audioInit() {
+  if (AC) return;
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    mGain = AC.createGain(); mGain.gain.value = 0;
+    AC.createMediaElementSource(music).connect(mGain).connect(AC.destination); music.volume = 1;
+    (DATA.sfx || []).forEach(n => fetch(`media/sfx/${n}.mp3`).then(r => r.arrayBuffer()).then(b => AC.decodeAudioData(b)).then(buf => { SFXB[n] = buf; }).catch(() => {}));
+    const wake = () => { if (AC.state === 'suspended') AC.resume().catch(() => {}); };
+    ['touchend', 'click', 'keydown'].forEach(e => document.addEventListener(e, wake, true));
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+  } catch (e) { AC = null; mGain = null; }
+}
+function sfx(n, v = .3) {
+  if (muted || !DATA.sfx || !DATA.sfx.includes(n)) return;
+  try {
+    if (AC && SFXB[n]) { const src = AC.createBufferSource(), g = AC.createGain(); src.buffer = SFXB[n]; g.gain.value = v; src.connect(g).connect(AC.destination); src.start(); return; }
+    (SFX[n] ||= new Audio(`media/sfx/${n}.mp3`)); const a = SFX[n].cloneNode(); a.volume = v; a.play().catch(() => {});
+  } catch (e) {}
+}
+let duckT, musicT = 0;
+const BED = .40, DUCK = .26;  // bed track is -16 LUFS: ≈ -24 LUFS between lines, ≈ -27 LUFS under the voice (-21) — audible on a phone, still under him
+function setMusic(t) {
+  musicT = t; const v = muted ? 0 : t;
+  if (mGain) { mGain.gain.cancelScheduledValues(AC.currentTime); mGain.gain.setTargetAtTime(v, AC.currentTime, .15); return; }
+  clearInterval(duckT); duckT = setInterval(() => { const d = v - music.volume; if (Math.abs(d) < .005) { music.volume = v; clearInterval(duckT); return; } music.volume = Math.max(0, Math.min(1, music.volume + d * .25)); }, 40);
+}
 
 /* ---------- the narrator's rhythm ----------
    Every line carries the start time of each spoken word (t: fractions of the clip, from build.py).
@@ -798,7 +823,7 @@ function playLine(line) {
     el.onended = finish; el.onerror = finish;
     pres.classList.add('talking'); setMusic(DUCK); setCaption(line.text);
     const loop = () => { if (el.duration) { const f = el.currentTime / el.duration; tickCaption(f); runSched(f); } raf = requestAnimationFrame(loop); };
-    if (!paused) { const pl = el.play(); if (pl) pl.catch(() => { paused = true; setPP(); }); }
+    if (!paused) { const pl = el.play(); if (pl) pl.catch(err => { if (err && err.name === 'NotAllowedError' && curEl === el) { paused = true; setPP(); } }); }
     loop();
   });
 }
@@ -1221,7 +1246,7 @@ $('#pp').onclick = () => { paused = !paused; setPP(); if (curEl) paused ? curEl.
 const SPEEDS = [1, 1.15, 1.3];
 $('#speed').onclick = () => { rate = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length]; $('#speed').textContent = fa(rate) + '×'; if (curEl) curEl.playbackRate = rate; };
 function setMute() { $('#mute').innerHTML = svg(muted ? 'muted' : 'sound'); }
-$('#mute').onclick = () => { muted = !muted; setMute(); music.muted = muted; TV.forEach(v => v.muted = muted); if (curEl) curEl.muted = muted; };
+$('#mute').onclick = () => { muted = !muted; setMute(); music.muted = muted; setMusic(musicT); TV.forEach(v => v.muted = muted); if (curEl) curEl.muted = muted; };
 $('#prev').innerHTML = svg('back'); $('#again').innerHTML = svg('redo'); $('#mapb').innerHTML = svg('grid'); nextB.insertAdjacentHTML('beforeend', svg('fwd')); setPP(); setMute();
 document.addEventListener('keydown', e => { if (e.target.closest('input,textarea,select')) return; if (e.key === ' ') { e.preventDefault(); $('#pp').click(); } if (e.key === 'ArrowLeft') nextB.click(); if (e.key === 'ArrowRight') $('#prev').click(); });
 
@@ -1291,7 +1316,7 @@ function boot() {
     <p>یک مربی، روبه‌روی تو. پنج فصل کوتاه تا اولین گفت‌وگوهای واقعی. صدای دستگاهت را روشن کن.</p>
     <div class="acts">${resumable ? '<button class="btn" type="button" data-c>ادامه از همان‌جا</button><button class="lnk" type="button" data-n>از اول</button>' : '<button class="btn" type="button" data-n>شروع</button>'}</div>`;
   document.body.appendChild(b);
-  const start = pos => { b.remove(); if (DATA.music) { music.src = 'media/music/bed.mp3'; music.volume = 0; music.play().catch(() => {}); setMusic(BED); }
+  const start = pos => { b.remove(); if (DATA.music) { music.src = 'media/music/bed.mp3'; music.volume = 0; audioInit(); music.play().catch(() => {}); setMusic(BED); }
     if (IDLES.length) idleV.play().catch(() => {}); go(pos); };
   b.querySelector('[data-n]').onclick = () => { S = fresh(); save(); start(0); };
   if (resumable) b.querySelector('[data-c]').onclick = () => start(S.pos);
