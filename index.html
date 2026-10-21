@@ -305,6 +305,10 @@ label.f { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4
 .acts { display: flex; gap: 10px; justify-content: flex-start; align-items: center; margin-top: 14px; }
 .btn { border: 0; border-radius: 14px; padding: 12px 22px; font-weight: 900; background: linear-gradient(180deg, var(--gold2), var(--gold)); color: #24170c; }
 .btn[disabled] { opacity: .4; }
+.scd { margin-inline-start: auto; position: relative; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  border: 1px solid var(--line); overflow: hidden; }
+.scd b { font-family: Lalezar, Vazirmatn; font-weight: 400; font-size: 17px; color: var(--gold2); position: relative; z-index: 1; }
+.scd i { position: absolute; inset: auto 0 0 0; height: 100%; background: rgba(226,178,96,.16); transform-origin: right; transform: scaleX(0); transition: transform 1s linear; }
 .lnk { border: 0; background: none; color: var(--muted); font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
 .names { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0; }
 .names input { padding: 9px 11px; font-size: 14px; }
@@ -1055,6 +1059,20 @@ function sheet(html, onMount) {
     onMount(s, close);
   });
 }
+/* sheets that need no typing go on by themselves: 5..1 next to the buttons; a tap restarts the count */
+function sheetCd(s, done) {
+  const acts = s.querySelector('.acts'); acts.insertAdjacentHTML('beforeend', '<span class="scd"><b></b><i></i></span>');
+  const b = acts.querySelector('.scd b'), bar = acts.querySelector('.scd i'); let left = 5;
+  const paint = () => { b.textContent = fa(left); bar.style.transform = `scaleX(${(5 - left) / 5})`; };
+  paint();
+  const t = setInterval(() => {
+    if (!s.isConnected) { clearInterval(t); return; }
+    if (paused) return;
+    left--; if (left <= 0) { clearInterval(t); done(); return; }
+    paint(); sfx('tick', .06);
+  }, 1000);
+  return { reset() { left = 5; paint(); } };
+}
 async function ask(gid) {
   const a = ASK[gid]; if (!a) return;
   setMode('show');  // the narrator steps aside; the sheet opens only below / beside him
@@ -1069,6 +1087,8 @@ async function ask(gid) {
       paint();
       s.querySelector('[data-ok]').onclick = () => { S.ans[key] = a.k === 'multi' ? [...sel] : [...sel][0]; save(); sfx('pop', .25); close(); };
       s.querySelector('[data-skip]').onclick = () => close();
+      const cd = sheetCd(s, () => (sel.size ? s.querySelector('[data-ok]') : s.querySelector('[data-skip]')).click());
+      s.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => cd.reset()));
     });
   } else if (a.k === 'text') {
     await sheet(`<h3>${esc(a.q)}</h3><textarea placeholder="${esc(a.ph || '')}">${esc(prev || '')}</textarea><div class="acts"><button class="btn" type="button" data-ok>ثبت</button>${skip}</div>`, (s, close) => {
@@ -1112,6 +1132,8 @@ async function ask(gid) {
         else { b.classList.add('x'); b.textContent = '✕'; sfx('tick', .12); s.querySelector('[data-r]').textContent = `تعداد انتخاب: ${fa(n)}`; }
       });
       s.querySelector('[data-ok]').onclick = () => close();
+      const cd = sheetCd(s, () => close());
+      s.querySelectorAll('.sq').forEach(q => q.addEventListener('click', () => cd.reset()));
     });
   } else if (a.k === 'first') {
     const names = S.ans.names || [], f = prev || {};
@@ -1159,9 +1181,11 @@ async function runGroup(gi) {
   paintSegs(gi, 1);
   if (my !== seq) return;
   S.done[g.id] = 1; save();
+  const asked = !!ASK[g.id];
   await ask(g.id);
   if (my !== seq) return;
   if (gi === G.length - 1) { finale(); return; }
+  if (asked) { runGroup(gi + 1); return; }
   nextB.classList.add('wait'); sfx('notify', .2);
   await new Promise(r => { waitNext = r; startCd(() => { if (waitNext === r) { waitNext = null; r(); } }); });
   stopCd();
