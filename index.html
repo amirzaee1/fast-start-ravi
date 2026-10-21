@@ -838,23 +838,32 @@ function spanW(el) {  // real drawn width, including children that stick out of 
   [el, ...el.querySelectorAll('*')].forEach(c => { const b = c.getBoundingClientRect(); if (b.width) { l = Math.min(l, b.left); r = Math.max(r, b.right); } });
   return Math.max(1, r - l);
 }
+function spanH(el) {  // real drawn height (borders, labels hanging below the grid…), never less than scrollHeight
+  let t = Infinity, b = -Infinity;
+  [el, ...el.querySelectorAll('*')].forEach(c => { const q = c.getBoundingClientRect(); if (q.height) { t = Math.min(t, q.top); b = Math.max(b, q.bottom); } });
+  return Math.max(el.scrollHeight, b - t, 1);
+}
 function fitBeat() {
   const el = beatEl; if (!el) return;
   requestAnimationFrame(() => {
-    el.style.transform = ''; el.style.width = ''; el.style.maxWidth = '';
+    // measure unscaled and without the .3s transition (a running transition would be measured mid-way),
+    // then glide from the old scale to the new one
+    const prev = el.style.transform;
+    el.style.transition = 'none'; el.style.transform = ''; el.style.width = ''; el.style.maxWidth = '';
     const H = board.clientHeight, W = board.clientWidth; if (!H || !W) return;
     const bd = el.querySelector('.phone .bd');
     while (bd && el.scrollHeight > H && bd.children.length > 2) bd.firstChild.remove();
-    let h = el.scrollHeight, s = H * .96 / h;
+    let h = spanH(el), s = H * .96 / h;
     if (s > 1) {
       const w0 = el.offsetWidth; s = Math.min(s * .9, 1.5);
       for (let k = 0; k < 3 && s > 1.02; k++) {
         el.style.maxWidth = 'none'; el.style.width = (w0 / s).toFixed(1) + 'px';
-        h = el.scrollHeight; s = Math.min(s, H * .9 / h, W * .95 / spanW(el));
+        h = spanH(el); s = Math.min(s, H * .9 / h, W * .95 / spanW(el));
       }
-      if (s <= 1.02) { el.style.width = ''; el.style.maxWidth = ''; h = el.scrollHeight; s = Math.min(1, H * .96 / h); }
+      if (s <= 1.02) { el.style.width = ''; el.style.maxWidth = ''; h = spanH(el); s = Math.min(1, H * .96 / h); }
     }
-    if (Math.abs(s - 1) > .01) el.style.transform = `scale(${s.toFixed(3)})`;
+    const next = Math.abs(s - 1) > .01 ? `scale(${s.toFixed(3)})` : '';
+    el.style.transform = prev; void el.offsetWidth; el.style.transition = ''; el.style.transform = next;
   });
 }
 addEventListener('resize', fitBeat);
@@ -1266,4 +1275,5 @@ function boot() {
 if (!S) S = fresh();
 boot();
 </script>
-</body
+</body>
+</html>
