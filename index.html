@@ -370,7 +370,7 @@ label.f { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4
   <div id="top">
     <div class="brand">شروع <b>سریع</b></div>
     <div id="segs"></div>
-    <button class="ib txt" id="speed" type="button" aria-label="سرعت پخش">۱×</button>
+    <button class="ib txt" id="speed" type="button" aria-label="سرعت پخش">۱٫۱×</button>
     <button class="ib" id="mute" type="button" aria-label="صدا"></button>
     <button class="ib" id="mapb" type="button" aria-label="نقشه‌ی مسیر"></button>
   </div>
@@ -703,7 +703,7 @@ const HV = new Set(DATA.have.v), HA = new Set(DATA.have.a);
 let S = (() => { try { return JSON.parse(localStorage.getItem(KEY)) || null; } catch (e) { return null; } })();
 const fresh = () => ({pos: 0, done: {}, ans: {}});
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
-let muted = false, rate = 1, paused = false;
+let muted = false, rate = 1.1, paused = false;  // a little brisker by default (Amir: no drag, one flow)
 
 /* ---------- media ---------- */
 const pres = $('#pres'), talkV = $('#talkV'), idleV = $('#idleV'), music = $('#music');
@@ -811,18 +811,25 @@ function playLine(line) {
       if (done) return; done = true; curStop = null; curEl = null; cancelAnimationFrame(raf); flushSched();
       pres.classList.remove('talking', 'audio-only'); setMusic(BED);
       if (el && el.classList.contains('tv')) { const last = el; setTimeout(() => { if (!curEl || curEl === last) { last.classList.remove('cur'); pres.classList.remove('has-talk'); } }, 700); }
-      if (el) { el.onended = el.onerror = null; try { el.pause(); } catch (e) {} }
+      if (el) { el.onended = el.onerror = el.ontimeupdate = null; try { el.pause(); } catch (e) {} }
       resolve();
     };
     curStop = finish;
-    if (HV.has(line.id)) { tvi ^= 1; el = TV[tvi]; const other = TV[tvi ^ 1]; el.src = `media/v/${line.id}.mp4`;
+    if (HV.has(line.id)) { tvi ^= 1; el = TV[tvi]; const other = TV[tvi ^ 1];
+      if (el.dataset.id !== line.id) { el.dataset.id = line.id; el.src = `media/v/${line.id}.mp4`; }  // usually already preloaded
       el.onplaying = () => { el.classList.add('cur'); pres.classList.add('has-talk'); setTimeout(() => { if (curEl === el) other.classList.remove('cur'); }, 240); }; }
     else if (HA.has(line.id)) { el = new Audio(`media/a/${line.id}.mp3`); pres.classList.add('audio-only'); }
     else { setCaption(line.text); tickCaption(1); runSched(1); setTimeout(finish, 1200 + line.text.length * 45); return; }
     curEl = el; el.muted = muted; el.defaultPlaybackRate = rate; el.playbackRate = rate;
     el.onended = finish; el.onerror = finish;
+    // one flow: skip the silent pad before the first word and stop right after the last one
+    const tt = line.t || [], lead = tt.length ? tt[0] : 0, tail = tt.length ? tt[tt.length - 1] : 1;
+    const seekIn = () => { if (el.duration && lead > 0) { const s0 = Math.max(0, lead * el.duration - .05); if (el.currentTime < s0 - .02) el.currentTime = s0; } };
+    if (el.readyState >= 1) seekIn(); else el.addEventListener('loadedmetadata', seekIn, {once: true});
+    const atEnd = () => el.duration && tail < 1 && el.currentTime >= tail * el.duration + .06;
+    el.ontimeupdate = () => { if (atEnd()) finish(); };
     pres.classList.add('talking'); setMusic(DUCK); setCaption(line.text);
-    const loop = () => { if (el.duration) { const f = el.currentTime / el.duration; tickCaption(f); runSched(f); } raf = requestAnimationFrame(loop); };
+    const loop = () => { if (el.duration) { const f = el.currentTime / el.duration; tickCaption(f); runSched(f); if (atEnd()) { finish(); return; } } raf = requestAnimationFrame(loop); };
     if (!paused) { const pl = el.play(); if (pl) pl.catch(err => { if (err && err.name === 'NotAllowedError' && curEl === el) { paused = true; setPP(); } }); }
     loop();
   });
@@ -1201,7 +1208,7 @@ async function runGroup(gi) {
     await playLine(g.lines[i]);
     while (paused && my === seq) await new Promise(r => setTimeout(r, 150));
     if (my !== seq) return;
-    if (i < g.lines.length - 1) await new Promise(r => setTimeout(r, 260 / rate));
+    // no gap between lines: the next clip is already loaded in the spare player
   }
   paintSegs(gi, 1);
   if (my !== seq) return;
@@ -1232,10 +1239,19 @@ function startCd(done) {
     paint(); sfx('tick', .08);
   }, 1000);
 }
+/* load the next line's clip into the spare player (the one playLine will use next), after this line's cross-fade,
+   already seeked to its first word — so the next line starts instantly, with no buffering gap */
 function preload(g, i) {
   const n = g.lines[i + 1] || (G[GI[g.id] + 1] || {lines: []}).lines[0]; if (!n) return;
-  const href = HV.has(n.id) ? `media/v/${n.id}.mp4` : HA.has(n.id) ? `media/a/${n.id}.mp3` : null;
-  if (href && !document.querySelector(`link[href="${href}"]`)) { const l = document.createElement('link'); l.rel = 'prefetch'; l.href = href; document.head.appendChild(l); }
+  if (!HV.has(n.id)) { if (HA.has(n.id)) { const a = new Audio(); a.preload = 'auto'; a.src = `media/a/${n.id}.mp3`; } return; }
+  const my = seq;
+  setTimeout(() => {
+    if (my !== seq) return;
+    const spare = TV[tvi ^ 1]; if (spare === curEl || spare.dataset.id === n.id) return;
+    spare.classList.remove('cur'); spare.dataset.id = n.id; spare.preload = 'auto'; spare.src = `media/v/${n.id}.mp4`; spare.load();
+    const lead = (n.t || [0])[0];
+    spare.addEventListener('loadedmetadata', () => { if (spare.dataset.id === n.id && lead > 0) spare.currentTime = Math.max(0, lead * spare.duration - .05); }, {once: true});
+  }, 700);
 }
 function go(gi) { stopCd(); seq++; halt(); paused = false; setPP(); waitNext = null; capEl.innerHTML = ''; runGroup(Math.max(0, Math.min(G.length - 1, gi))); }
 nextB.onclick = () => { sfx('tap', .25); stopCd(); if (waitNext) { const r = waitNext; waitNext = null; r(); } else go(S.pos + 1); };
@@ -1243,8 +1259,8 @@ $('#prev').onclick = () => { sfx('tap', .25); go(S.pos - 1); };
 $('#again').onclick = () => { sfx('tap', .25); go(S.pos); };
 function setPP() { $('#pp').innerHTML = svg(paused ? 'play' : 'pause'); }
 $('#pp').onclick = () => { paused = !paused; setPP(); if (curEl) paused ? curEl.pause() : curEl.play().catch(() => {}); };
-const SPEEDS = [1, 1.15, 1.3];
-$('#speed').onclick = () => { rate = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length]; $('#speed').textContent = fa(rate) + '×'; if (curEl) curEl.playbackRate = rate; };
+const SPEEDS = [1.1, 1.25, 1.4, 1];
+$('#speed').onclick = () => { rate = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length]; $('#speed').textContent = fa(rate).replace('.', '٫') + '×'; if (curEl) curEl.playbackRate = rate; };
 function setMute() { $('#mute').innerHTML = svg(muted ? 'muted' : 'sound'); }
 $('#mute').onclick = () => { muted = !muted; setMute(); music.muted = muted; setMusic(musicT); TV.forEach(v => v.muted = muted); if (curEl) curEl.muted = muted; };
 $('#prev').innerHTML = svg('back'); $('#again').innerHTML = svg('redo'); $('#mapb').innerHTML = svg('grid'); nextB.insertAdjacentHTML('beforeend', svg('fwd')); setPP(); setMute();
