@@ -1385,14 +1385,11 @@ async function runGroup(gi) {
   paintSegs(gi, 1);
   if (my !== seq) return;
   S.done[g.id] = 1; save();
-  const asked = !!ASK[g.id];
   await ask(g.id);
   if (my !== seq) return;
   if (gi === G.length - 1) { finale(); return; }
-  if (asked) { runGroup(gi + 1); return; }
-  nextB.classList.add('wait'); sfx('notify', .2);
-  await new Promise(r => { waitNext = r; startCd(() => { if (waitNext === r) { waitNext = null; r(); } }); });
-  stopCd();
+  // one flow (Amir): a scene without a question goes straight on — no 5..1 wait between scenes; only the question
+  // sheets count 5..1 (sheetCd) before going on by themselves
   if (my === seq) runGroup(gi + 1);
 }
 /* 5-4-3-2-1 on the Next button, then it goes on by itself. Runs only after ask() resolved, so a typing or choosing
