@@ -1254,15 +1254,18 @@ function sheet(html, onMount) {
     onMount(s, close);
   });
 }
-/* sheets that need no typing go on by themselves: 5..1 next to the buttons; a tap restarts the count */
-function sheetCd(s, done) {
+/* every sheet goes on by itself: 5..1 next to the buttons; a tap restarts the count. Typing sheets (idleMs) hold the
+   count while the viewer types and start it again once they have been idle that long; at 0 what was typed is saved. */
+function sheetCd(s, done, idleMs = 0) {
   const acts = s.querySelector('.acts'); acts.insertAdjacentHTML('beforeend', '<span class="scd"><b></b><i></i></span>');
-  const b = acts.querySelector('.scd b'), bar = acts.querySelector('.scd i'); let left = 5;
+  const b = acts.querySelector('.scd b'), bar = acts.querySelector('.scd i'); let left = 5, last = 0;
   const paint = () => { b.textContent = fa(left); bar.style.transform = `scaleX(${(5 - left) / 5})`; };
   paint();
+  if (idleMs) ['input', 'keydown', 'focusin', 'pointerdown'].forEach(e => s.addEventListener(e, () => { last = Date.now(); left = 5; paint(); }, true));
   const t = setInterval(() => {
     if (!s.isConnected) { clearInterval(t); return; }
     if (paused) return;
+    if (idleMs && Date.now() - last < idleMs) return;  // still typing: hold
     left--; if (left <= 0) { clearInterval(t); done(); return; }
     paint(); sfx('tick', .06);
   }, 1000);
@@ -1290,6 +1293,7 @@ async function ask(gid) {
       const t = s.querySelector('textarea'); setTimeout(() => t.focus(), 300);
       s.querySelector('[data-ok]').onclick = () => { if (t.value.trim()) { S.ans[key] = t.value.trim(); save(); sfx('pop', .25); } close(); };
       s.querySelector('[data-skip]').onclick = () => close();
+      sheetCd(s, () => s.querySelector('[data-ok]').click(), 4000);
     });
   } else if (a.k === 'goal') {
     const g = prev || {};
@@ -1300,6 +1304,7 @@ async function ask(gid) {
       <div class="acts"><button class="btn" type="button" data-ok>ثبت هدف</button>${skip}</div>`, (s, close) => {
       s.querySelector('[data-ok]').onclick = () => { const v = {}; s.querySelectorAll('[data-f]').forEach(f => v[f.dataset.f] = f.value.trim()); if (v.num || v.res) { S.ans[key] = v; save(); sfx('ding', .3); } close(); };
       s.querySelector('[data-skip]').onclick = () => close();
+      sheetCd(s, () => s.querySelector('[data-ok]').click(), 4000);
     });
   } else if (a.k === 'names') {
     const names = (prev || []).concat(Array(20).fill('')).slice(0, 20);
@@ -1313,6 +1318,7 @@ async function ask(gid) {
       s.dataset.c = count();
       s.querySelector('[data-ok]').onclick = () => { S.ans[key] = ins.map(x => x.value.trim()).filter(Boolean); save(); close(); };
       s.querySelector('[data-skip]').onclick = () => close();
+      sheetCd(s, () => s.querySelector('[data-ok]').click(), 4000);
     });
   } else if (a.k === 'chess') {
     await sheet(`<h3>${esc(a.q)}</h3><p class="hint">هر خانه را لمس کن. فقط یکی‌شان ۱۰ میلیارد است.</p><div class="game"><div class="bd">${Array.from({length: 64}, (_, i) =>
@@ -1341,6 +1347,7 @@ async function ask(gid) {
       s.querySelectorAll('.chip').forEach(c => c.onclick = () => { who.value = c.textContent; s.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c)); sfx('tick', .2); });
       s.querySelector('[data-ok]').onclick = () => { if (who.value.trim()) { S.ans[key] = {who: who.value.trim(), when: s.querySelector('[data-f=when]').value}; save(); sfx('ding', .35); } close(); };
       s.querySelector('[data-skip]').onclick = () => close();
+      sheetCd(s, () => s.querySelector('[data-ok]').click(), 4000);
     });
   }
 }
